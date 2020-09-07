@@ -1,0 +1,425 @@
+# Sukhveer and Albert, 2017
+#include <Servo.h>
+
+//*********************************************
+// *********** SERVO **************************
+//*********************************************
+// The "STOP" positions for each of the two servos
+#define LEFT_SERVO_STOP 92
+#define RIGHT_SERVO_STOP 96
+// Speed calibration ratio for the two servos (speed of left
+// servo divided by speed of right servo at the same "write #")
+#define LEFT_SERVO_OVER_RIGHT_SERVO_SPEED_RATIO 0.75 // 1.20
+
+// The time needed for the servo to turn 90 degrees at the default movement speed
+// of 30
+#define NINETY_DEGREES_TURN_TIME 1450 // 2100
+
+// The pin for the left and right servos
+#define leftServoPin 8
+#define rightServoPin 9
+
+// Servo objects for each of the two servos
+Servo leftServo;
+Servo rightServo;
+
+int leftServoWrite = LEFT_SERVO_STOP;
+int rightServoWrite = RIGHT_SERVO_STOP;
+
+int movementSpeed = 0;
+
+int numberOfTimesTurned = 0;
+long timeCheckedMovement = 0;
+
+//*********************************************
+// ************** ULTRASONIC SENSOR ***********
+//*********************************************
+// Values related to the ultrasonic sensor
+#define trigPin 2
+#define echoPin 3
+#define obstacleInFrontNumber 23 // 30
+
+// Variables related to the ultrasonic sensor
+int numberOfHIGHUltrasonicReadings = 0;
+float previousUltrasonicSensorReading = 0;
+float numberOfSameReadings = 0;
+
+//*********************************************
+// ************** FLAME SENSOR ****************
+//*********************************************
+#define fireSensorPin A0
+#define minimumFlameDetectionNumber 70
+#define optimalFlameDetectionNumber 890
+
+// For the fan
+#define fanControlPin 6
+
+//*********************************************
+// ***************** MEMORY *******************
+//*********************************************
+char* movementDirections = 0;
+int* timeMovingInDirections = 0;
+int movementDirectionsArraySize = 0;
+
+unsigned long timeStarted;
+
+boolean extinguish = false;
+
+void setup() {
+  leftServo.attach(leftServoPin);
+  rightServo.attach(rightServoPin);
+
+  Serial.begin(9600);
+
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  pinMode(fanControlPin, OUTPUT);
+
+  //digitalWrite(fanControlPin, HIGH);
+
+  movementSpeed = 30;
+
+  calculateServoWriteNumbers("FORWARD");
+
+  //delay(500);
+
+  //performFlameAlgorithm();
+}
+
+int fireSensorInput = 0;
+
+void loop() {
+  /*fireSensorInput = readFireSensor();
+  //Serial.println(fireSensorInput);
+
+  if (fireSensorInput >= minimumFlameDetectionNumber) { // && !extinguish) {
+    performFlameAlgorithm();
+    //extinguish = true;
+  }*/
+
+  float ultrasonicSensorInput = readUltrasonicSensor();
+  Serial.println(ultrasonicSensorInput);
+  delay(15);
+  //checkForBlockage();
+  //timeCheckedMovement += 15;
+  //moveRobot(25);
+
+}
+
+void moveRobot(int timeToMove) {
+  leftServo.write(leftServoWrite);
+  rightServo.write(rightServoWrite);
+
+  delay(timeToMove);
+}
+
+void stopRobot() {
+  leftServo.write(LEFT_SERVO_STOP);
+  rightServo.write(RIGHT_SERVO_STOP);
+}
+
+void addMovementToMemory(char movementDirectionToAdd, int timeMovingInDirection) {
+  // Reallocate the space used by the original array in order to make it extendable
+  movementDirectionsArraySize++;
+  if (movementDirections != 0) {
+    movementDirections = realloc(movementDirections, movementDirectionsArraySize * sizeof(char));
+    movementDirections[movementDirectionsArraySize - 1] = movementDirectionToAdd;
+  } else {
+    movementDirections = malloc(movementDirectionsArraySize * sizeof(char));
+  }
+  if (timeMovingInDirections != 0) {
+    timeMovingInDirections = realloc(timeMovingInDirections, movementDirectionsArraySize * sizeof(int));
+    timeMovingInDirections[movementDirectionsArraySize - 1] = timeMovingInDirection;
+  } else {
+    timeMovingInDirections = malloc(movementDirectionsArraySize * sizeof(int));
+  }
+}
+
+void calculateServoWriteNumbers(String desiredState) {
+  if (desiredState.equals("FORWARD")) {
+    leftServoWrite = LEFT_SERVO_STOP - (movementSpeed * LEFT_SERVO_OVER_RIGHT_SERVO_SPEED_RATIO);
+    rightServoWrite = RIGHT_SERVO_STOP + (movementSpeed);
+    return;
+  }
+  // +/- 1 since change of direction
+  if (desiredState.equals("BACKWARD")) {
+    leftServoWrite = LEFT_SERVO_STOP + 1 + (movementSpeed * LEFT_SERVO_OVER_RIGHT_SERVO_SPEED_RATIO);
+    rightServoWrite = RIGHT_SERVO_STOP - 1 - (movementSpeed);
+    return;
+  }
+  if (desiredState.equals("F_LEFT")) {
+    leftServoWrite = LEFT_SERVO_STOP;
+    rightServoWrite = RIGHT_SERVO_STOP + (movementSpeed);
+    return;
+  }
+  if (desiredState.equals("F_RIGHT")) {
+    leftServoWrite = LEFT_SERVO_STOP - (movementSpeed * LEFT_SERVO_OVER_RIGHT_SERVO_SPEED_RATIO);
+    rightServoWrite = RIGHT_SERVO_STOP;
+    return;
+  }
+  if (desiredState.equals("B_LEFT")) {
+    leftServoWrite = LEFT_SERVO_STOP;
+    rightServoWrite = RIGHT_SERVO_STOP - 1 - (movementSpeed);
+    return;
+  }
+  if (desiredState.equals("B_RIGHT")) {
+    leftServoWrite = LEFT_SERVO_STOP + 1 + (movementSpeed * LEFT_SERVO_OVER_RIGHT_SERVO_SPEED_RATIO);
+    rightServoWrite = RIGHT_SERVO_STOP;
+    return;
+  }
+}
+
+// Returns the distance (in cm) of the nearest object
+// Or 0 if there is no object in proximity
+float readUltrasonicSensor() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  float objectProximity = pulseIn(echoPin, HIGH, 8000);
+
+  //Serial.println(objectProximity);
+
+  if (objectProximity == 0) {
+    return -1;
+  }
+  // 29 microseconds per centimeter
+  objectProximity = objectProximity / 2.0 / 29.0;
+
+  return objectProximity;
+}
+
+void checkForBlockage() {
+  float objectProximity = readUltrasonicSensor();
+  //Serial.print("READING ");
+  //Serial.println(objectProximity);
+
+  if (objectProximity <= obstacleInFrontNumber && objectProximity != -1) {
+    numberOfHIGHUltrasonicReadings++;
+
+    if (numberOfHIGHUltrasonicReadings >= 5) {
+      performBlockageAlgorithm();
+      numberOfHIGHUltrasonicReadings = 0;
+    }
+
+  }
+
+  if (abs(objectProximity - previousUltrasonicSensorReading) <= 1.0) {
+    numberOfSameReadings++;
+  }
+  else {
+    numberOfSameReadings = 0;
+  }
+  previousUltrasonicSensorReading = objectProximity;
+
+  if (numberOfSameReadings >= 100 && objectProximity != -1) {
+    performBlockageAlgorithm();
+    numberOfSameReadings = 0;
+  }
+
+  else if (numberOfSameReadings >= 1000 && objectProximity == -1) {
+    performBlockageAlgorithm();
+    numberOfSameReadings = 0;
+  }
+}
+
+// Algorithm to guide the robot around an obstacle/wall
+void performBlockageAlgorithm() {
+
+  //calculateServoWriteNumbers("BACKWARD");
+  //Serial.println("BACKING UP FROM OBSTACLE");
+  //moveRobot(500);
+
+  // Store the forward movement and its time
+  //EEPROM.write(2*numberOfTimesTurned, 0);
+  //EEPROM.write(2*numberOfTimesTurned + 1, (millis() - timeCheckedMovement)/1000);
+
+  calculateServoWriteNumbers("F_RIGHT");
+  //Serial.println("TURNING RIGHT");
+  moveRobot(NINETY_DEGREES_TURN_TIME);
+  stopRobot();
+  float rightTurnObstacleProximity = readUltrasonicSensor();
+
+  if (rightTurnObstacleProximity == -1) {
+    calculateServoWriteNumbers("FORWARD");
+    //Serial.println("END OF OBSTACLE MANOUVER");
+    return;
+  }
+
+  calculateServoWriteNumbers("B_RIGHT");
+  //Serial.println("BACKING RIGHT");
+  moveRobot(NINETY_DEGREES_TURN_TIME);
+
+  calculateServoWriteNumbers("F_LEFT");
+  //Serial.println("FORWARD LEFT");
+  moveRobot(NINETY_DEGREES_TURN_TIME);
+  stopRobot();
+  float leftTurnObstacleProximity = readUltrasonicSensor();
+
+  if (leftTurnObstacleProximity == -1) {
+    calculateServoWriteNumbers("FORWARD");
+    //Serial.println("END OF OBSTACLE MANOUVER");
+    return;
+  }
+
+  if (leftTurnObstacleProximity > rightTurnObstacleProximity) {
+    //Serial.println("DECIDED FORWARD LEFT");
+    // Store the left movement
+    numberOfTimesTurned++;
+    //EEPROM.write(2*numberOfTimesTurned, -1);
+    //EEPROM.write(2*numberOfTimesTurned + 1, NINETY_DEGREES_TURN_TIME / 1000);
+  }
+
+  else {
+    //Serial.println("DECIDED FORWARD RIGHT");
+    calculateServoWriteNumbers("B_LEFT");
+    //Serial.println("BACKING LEFT");
+    moveRobot(NINETY_DEGREES_TURN_TIME);
+
+    calculateServoWriteNumbers("F_RIGHT");
+    //Serial.println("FORWARD RIGHT");
+    moveRobot(NINETY_DEGREES_TURN_TIME);
+
+    // Store the right movement
+    numberOfTimesTurned++;
+    //EEPROM.write(2*numberOfTimesTurned, 1);
+    //EEPROM.write(2*numberOfTimesTurned + 1, NINETY_DEGREES_TURN_TIME/1000);
+  }
+
+  calculateServoWriteNumbers("FORWARD");
+  timeCheckedMovement = millis();
+  //Serial.println("END OF OBSTACLE MANOUVER");
+}
+
+int readFireSensor() {
+  int fireSensorReading = analogRead(fireSensorPin);
+  return map(0, 1023, 0, 255, fireSensorReading);
+}
+
+
+void switchFan(boolean state) {
+  if (state == true) {
+    digitalWrite(fanControlPin, HIGH);
+  }
+  else {
+    digitalWrite(fanControlPin, LOW);
+  }
+}
+
+void performFlameAlgorithm() {
+  Serial.println("FLAME DETECTED!!");
+
+  int highestFlameSensorReading = 0;
+  int latestFlameSensorReading = 0;
+
+  int numberOfLowerReadings = 0;
+
+  boolean optimalAngleFound = false;
+
+  calculateServoWriteNumbers("F_LEFT");
+
+  while (numberOfLowerReadings < 5) { //  && !optimalAngleFound
+    latestFlameSensorReading = readFireSensor();
+
+    if (latestFlameSensorReading >= optimalFlameDetectionNumber) {
+      optimalAngleFound = true;
+    }
+    else if (latestFlameSensorReading < highestFlameSensorReading) {
+      stopRobot();
+      numberOfLowerReadings++;
+      delay(15);
+    } else {
+      numberOfLowerReadings = 0;
+      highestFlameSensorReading = latestFlameSensorReading;
+      moveRobot(110);
+    }
+
+    Serial.print(latestFlameSensorReading);
+    Serial.print(" : ");
+    Serial.print(highestFlameSensorReading);
+    Serial.print(" : ");
+    Serial.print(numberOfLowerReadings);
+    Serial.println();
+  }
+
+  Serial.println("DETECTED THAT LEFT IS THE WRONG WAY");
+
+  delay(100);
+
+  numberOfLowerReadings = 0;
+  highestFlameSensorReading = 0;
+
+  calculateServoWriteNumbers("F_RIGHT");
+
+  while (numberOfLowerReadings < 5) {
+    latestFlameSensorReading = readFireSensor();
+
+    if (latestFlameSensorReading >= optimalFlameDetectionNumber) {
+      optimalAngleFound = true;
+    }
+    else if (latestFlameSensorReading < highestFlameSensorReading) {
+      stopRobot();
+      numberOfLowerReadings++;
+      delay(15);
+    } else {
+      numberOfLowerReadings = 0;
+      highestFlameSensorReading = latestFlameSensorReading;
+      moveRobot(110);
+    }
+
+    Serial.print(latestFlameSensorReading);
+    Serial.print(" : ");
+    Serial.print(highestFlameSensorReading);
+    Serial.print(" : ");
+    Serial.print(numberOfLowerReadings);
+    Serial.println();
+  }
+
+  Serial.println("DETECTED THAT RIGHT IS THE WRONG WAY");
+
+  calculateServoWriteNumbers("B_RIGHT");
+  moveRobot(110);
+
+  stopRobot();
+
+  Serial.println("\n Found the optimal direction. Extinguishing fire now!!");
+
+  numberOfLowerReadings = 0;
+
+  switchFan(true);
+
+  while (numberOfLowerReadings < 5) {
+    delay(15);
+    if (readFireSensor() >= minimumFlameDetectionNumber) {
+      numberOfLowerReadings = 0;
+    } else {
+      numberOfLowerReadings++;
+    }
+  }
+  switchFan(false);
+
+  calculateServoWriteNumbers("FORWARD");
+
+  // Knock the dowel over
+  //calculateServoWriteNumbers("BACKWARD");
+  //moveRobot(1500);
+  //movementSpeed = 60;
+  //calculateServoWriteNumbers("FORWARD");
+  //moveRobot(2000);
+
+  //exitMaze();
+}
+
+void findAndKnockOverDowel() {
+// COMPLETE
+}
+
+void exitMaze() {
+  for (int i = movementDirectionsArraySize - 1; i >= 0; i--) {
+// COMPLETE
+  }
+}
+
